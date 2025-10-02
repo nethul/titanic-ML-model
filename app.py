@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import joblib
 import os
 import pandas as pd
@@ -10,6 +11,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Enable CORS for all routes
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",  # Or specify your frontend URL: ["http://localhost:5173", "https://your-frontend.com"]
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 def train_new_model():
     """Always train a fresh model to avoid version conflicts"""
@@ -26,7 +36,7 @@ def train_new_model():
         
         # Train model with optimized parameters
         model = RandomForestClassifier(
-            n_estimators=50,  # Reduced for faster training
+            n_estimators=50,
             random_state=42,
             max_depth=10
         )
@@ -39,7 +49,7 @@ def train_new_model():
         logger.error(f"❌ Model training failed: {e}")
         return None
 
-# Train a fresh model on startup (avoid loading old .pkl files)
+# Train a fresh model on startup
 model = train_new_model()
 
 @app.route('/')
@@ -57,8 +67,12 @@ def health():
         'model_loaded': model is not None
     })
 
-@app.route('/predict', methods=['POST'])
+@app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
+    # Handle preflight request
+    if request.method == 'OPTIONS':
+        return '', 204
+    
     if model is None:
         return jsonify({'error': 'Model not available. Service unavailable.'}), 503
     
