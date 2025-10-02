@@ -1,51 +1,68 @@
-# app.py - Your main Flask application
 from flask import Flask, request, jsonify
 import joblib
-import pandas as pd
 import os
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.datasets import fetch_openml
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Load the model when the app starts
-try:
-    model = joblib.load('titanic_model.pkl')
-    print("✅ Model loaded successfully!")
-except Exception as e:
-    print(f"❌ Error loading model: {e}")
-    model = None
+def train_new_model():
+    """Always train a fresh model to avoid version conflicts"""
+    logger.info("🔄 Training new model...")
+    try:
+        # Load Titanic dataset
+        titanic = fetch_openml('titanic', version=1, as_frame=True)
+        X, y = titanic.data, titanic.target
+        
+        # Simple preprocessing
+        X = X[['pclass', 'sex', 'age', 'sibsp', 'parch']]
+        X = pd.get_dummies(X, columns=['sex'], drop_first=True)
+        X = X.fillna(X.mean())
+        
+        # Train model with optimized parameters
+        model = RandomForestClassifier(
+            n_estimators=50,  # Reduced for faster training
+            random_state=42,
+            max_depth=10
+        )
+        model.fit(X, y)
+        
+        logger.info("✅ New model trained successfully!")
+        return model
+        
+    except Exception as e:
+        logger.error(f"❌ Model training failed: {e}")
+        return None
+
+# Train a fresh model on startup (avoid loading old .pkl files)
+model = train_new_model()
 
 @app.route('/')
 def home():
     return jsonify({
         'message': 'Titanic Survival Prediction API',
-        'endpoints': {
-            'predict': '/predict (POST)',
-            'health': '/health (GET)'
-        },
-        'usage': 'Send POST request to /predict with JSON data'
+        'model_loaded': model is not None,
+        'status': 'ready' if model is not None else 'training_failed'
     })
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'healthy', 'model_loaded': model is not None})
+    return jsonify({
+        'status': 'healthy' if model is not None else 'unhealthy',
+        'model_loaded': model is not None
+    })
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    """
-    Expected JSON format:
-    {
-        "pclass": 1,
-        "sex": "female", 
-        "age": 25,
-        "sibsp": 0,
-        "parch": 0
-    }
-    """
     if model is None:
-        return jsonify({'error': 'Model not loaded'}), 500
+        return jsonify({'error': 'Model not available. Service unavailable.'}), 503
     
     try:
-        # Get JSON data from request
         data = request.get_json()
         
         # Validate required fields
@@ -54,36 +71,29 @@ def predict():
             if field not in data:
                 return jsonify({'error': f'Missing field: {field}'}), 400
         
-        # Convert and validate data types
+        # Convert and validate data
         try:
             pclass = int(data['pclass'])
             age = float(data['age'])
             sibsp = int(data['sibsp'])
             parch = int(data['parch'])
             sex = str(data['sex']).lower()
-            
-            # Validate sex input
-            if sex not in ['male', 'female']:
-                return jsonify({'error': "sex must be 'male' or 'female'"}), 400
-                
-            # Validate pclass
-            if pclass not in [1, 2, 3]:
-                return jsonify({'error': 'pclass must be 1, 2, or 3'}), 400
-                
-        except ValueError as e:
-            return jsonify({'error': f'Invalid data type: {str(e)}'}), 400
+        except (ValueError, TypeError) as e:
+            return jsonify({'error': f'Invalid data types: {str(e)}'}), 400
         
-        # Prepare input for model (same format as training)
+        if sex not in ['male', 'female']:
+            return jsonify({'error': "sex must be 'male' or 'female'"}), 400
+        if pclass not in [1, 2, 3]:
+            return jsonify({'error': "pclass must be 1, 2, or 3"}), 400
+        
+        # Prepare input for model
         input_data = [[pclass, age, sibsp, parch, 1 if sex == 'male' else 0]]
         
         # Make prediction
         probability = model.predict_proba(input_data)[0][1]
         survival_chance = round(probability * 100, 2)
-        
-        # Determine survival status
         status = "Survive" if survival_chance > 50 else "Not Survive"
         
-        # Return prediction
         return jsonify({
             'survival_probability': survival_chance,
             'survival_status': status,
@@ -94,12 +104,13 @@ def predict():
                 'sibsp': sibsp,
                 'parch': parch
             },
-            'message': 'Success'
+            'message': 'Prediction successful'
         })
         
     except Exception as e:
+        logger.error(f"Prediction error: {e}")
         return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
