@@ -36,9 +36,9 @@ def train_new_model():
         
         # Train model with optimized parameters
         model = RandomForestClassifier(
-            n_estimators=50,
-            random_state=42,
-            max_depth=10
+            n_estimators=100,
+            random_state=1,
+            max_depth=5
         )
         model.fit(X, y)
         
